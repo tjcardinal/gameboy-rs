@@ -1,57 +1,245 @@
-macro_rules! u16_register {
-    ($getter:ident, $setter:ident, $hi:ident, $lo:ident) => {
-        fn $getter(&self) -> u16 {
-            (self.$hi as u16) << 8 | self.$lo as u16
-        }
+use crate::registers::{Registers, U16Register, U8Register};
 
-        fn $setter(&mut self, val: u16) {
-            self.$hi = (val >> 8) as u8;
-            self.$lo = (val & 0x00FF) as u8;
-        }
-    };
-}
-
-macro_rules! flag {
-    ($getter:ident, $setter:ident, $index:literal) => {
-        fn $getter(&self) -> bool {
-            (self.f & 1 << $index) != 0
-        }
-
-        fn $setter(&mut self, val: bool) {
-            self.f = match val {
-                true => self.f | 1 << $index,
-                false => self.f & (0xFF ^ (1 << $index)),
-            }
-        }
-    };
-}
-
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct Registers {
-    a: u8,
-    b: u8,
-    c: u8,
-    d: u8,
-    e: u8,
-    f: u8,
-    h: u8,
-    l: u8,
-}
-
-impl Registers {
-    u16_register!(af, set_af, a, f);
-    u16_register!(bc, set_bc, b, c);
-    u16_register!(de, set_de, d, e);
-    u16_register!(hl, set_hl, h, l);
-
-    flag!(zero_flag, set_zero_flag, 7);
-    flag!(subtraction_flag, set_subtraction_flag, 6);
-    flag!(half_carry_flag, set_half_carry_flag, 5);
-    flag!(carry_flag, set_carry_flag, 4);
-}
-
+#[derive(Debug, Default)]
 pub struct Cpu {
     registers: Registers,
+}
+
+impl Cpu {
+    // 8-bit arithmetic/Logic
+    fn add(&mut self, val: u8) {
+        let (new_value, overflowed) = self.registers.a.overflowing_add(val);
+        self.registers.f.zero = new_value == 0;
+        self.registers.f.subtraction = false;
+        self.registers.f.half_carry = (self.registers.a & 0x0F) + (val & 0x0F) > 0x0F;
+        self.registers.f.carry = overflowed;
+        self.registers.a = new_value;
+    }
+
+    fn adc(&mut self, val: u8) {
+        let (first_value, first_overflowed) = self.registers.a.overflowing_add(val);
+        let (second_value, second_overflowed) =
+            first_value.overflowing_add(self.registers.f.carry as u8);
+        self.registers.f.zero = second_value == 0;
+        self.registers.f.subtraction = false;
+        self.registers.f.half_carry =
+            (self.registers.a & 0x0F) + (val & 0x0F) + (self.registers.f.carry as u8 & 0x0F) > 0x0F;
+        self.registers.f.carry = first_overflowed | second_overflowed;
+        self.registers.a = second_value;
+    }
+
+    fn sub(&mut self, val: u8) {
+        let (new_value, overflowed) = self.registers.a.overflowing_sub(val);
+        self.registers.f.zero = new_value == 0;
+        self.registers.f.subtraction = true;
+        self.registers.f.half_carry = (self.registers.a & 0x0F) - (val & 0x0F) > 0x0F;
+        self.registers.f.carry = overflowed;
+        self.registers.a = new_value;
+    }
+
+    fn sbc(&mut self, val: u8) {
+        let (first_value, first_overflowed) = self.registers.a.overflowing_add(val);
+        let (second_value, second_overflowed) =
+            first_value.overflowing_add(self.registers.f.carry as u8);
+        self.registers.f.zero = second_value == 0;
+        self.registers.f.subtraction = true;
+        self.registers.f.half_carry =
+            (self.registers.a & 0x0F) - (val & 0x0F) - (self.registers.f.carry as u8 & 0x0F) > 0x0F;
+        self.registers.f.carry = first_overflowed | second_overflowed;
+        self.registers.a = second_value;
+    }
+
+    fn and(&mut self, val: u8) {
+        self.registers.a = self.registers.a & val;
+        self.registers.f.zero = self.registers.a == 0;
+        self.registers.f.subtraction = false;
+        self.registers.f.half_carry = true;
+        self.registers.f.carry = false;
+    }
+
+    fn xor(&mut self, val: u8) {
+        self.registers.a = self.registers.a ^ val;
+        self.registers.f.zero = self.registers.a == 0;
+        self.registers.f.subtraction = false;
+        self.registers.f.half_carry = false;
+        self.registers.f.carry = false;
+    }
+
+    fn or(&mut self, val: u8) {
+        self.registers.a = self.registers.a | val;
+        self.registers.f.zero = self.registers.a == 0;
+        self.registers.f.subtraction = false;
+        self.registers.f.half_carry = false;
+        self.registers.f.carry = false;
+    }
+
+    fn cp(&mut self, val: u8) {
+        let (new_value, overflowed) = self.registers.a.overflowing_sub(val);
+        self.registers.f.zero = new_value == 0;
+        self.registers.f.subtraction = true;
+        self.registers.f.half_carry = (self.registers.a & 0x0F) - (val & 0x0F) > 0x0F;
+        self.registers.f.carry = overflowed;
+    }
+
+    fn inc(&mut self, id: U8Register) {
+        let reg = match id {
+            U8Register::A => &mut self.registers.a,
+            U8Register::B => &mut self.registers.b,
+            U8Register::C => &mut self.registers.c,
+            U8Register::D => &mut self.registers.d,
+            U8Register::E => &mut self.registers.e,
+            U8Register::H => &mut self.registers.h,
+            U8Register::L => &mut self.registers.l,
+        };
+        let new_value = reg.wrapping_add(1);
+        self.registers.f.zero = new_value == 0;
+        self.registers.f.subtraction = false;
+        self.registers.f.half_carry = (*reg & 0x0F) + 1 > 0x0F;
+        *reg = new_value;
+    }
+
+    fn dec(&mut self, id: U8Register) {
+        let reg = match id {
+            U8Register::A => &mut self.registers.a,
+            U8Register::B => &mut self.registers.b,
+            U8Register::C => &mut self.registers.c,
+            U8Register::D => &mut self.registers.d,
+            U8Register::E => &mut self.registers.e,
+            U8Register::H => &mut self.registers.h,
+            U8Register::L => &mut self.registers.l,
+        };
+        let new_value = reg.wrapping_sub(1);
+        self.registers.f.zero = new_value == 0;
+        self.registers.f.subtraction = true;
+        self.registers.f.half_carry = (*reg & 0x0F) - 1 > 0x0F;
+        *reg = new_value;
+    }
+
+    fn daa(&mut self) {
+        if self.registers.f.subtraction {
+            self.registers.a = self.registers.a -
+                (self.registers.f.carry || self.registers.a > 0x9F) as u8 * 0x60 -
+                (self.registers.f.half_carry || self.registers.a & 0x0F > 0x09) as u8 * 0x06;
+
+        } else {
+            self.registers.a = self.registers.a +
+                (self.registers.f.carry || self.registers.a > 0x9F) as u8 * 0x60 +
+                (self.registers.f.half_carry || self.registers.a & 0x0F > 0x09) as u8 * 0x06;
+        }
+        self.registers.f.carry = self.registers.a > 0x99;
+        self.registers.f.zero = self.registers.a == 0;
+    }
+
+    fn cpl(&mut self) {
+        self.registers.a = self.registers.a ^ 0xFF;
+        self.registers.f.subtraction = true;
+        self.registers.f.half_carry = true;
+    }
+
+    // 16-bit arithmetic/Logic
+    fn add_HL(&mut self, id: U16Register) {
+        let reg = match id {
+            U16Register::BC => self.registers.bc(),
+            U16Register::DE => self.registers.de(),
+            U16Register::HL => self.registers.hl(),
+            U16Register::SP => self.registers.sp,
+        };
+        let (new_value, overflowed) = self.registers.hl().overflowing_add(reg);
+        self.registers.f.subtraction = false;
+        self.registers.f.half_carry = (self.registers.hl() & 0x0F00) + (reg & 0x0F00) > 0x0F00;
+        self.registers.f.carry = overflowed;
+        self.registers.set_hl(new_value);
+    }
+
+    fn inc_u16(&mut self, id: U16Register) {
+        match id {
+            U16Register::BC => {
+                self.registers.set_bc(self.registers.bc().wrapping_add(1));
+            }
+            U16Register::DE => {
+                self.registers.set_de(self.registers.de().wrapping_add(1));
+            }
+            U16Register::HL => {
+                self.registers.set_hl(self.registers.hl().wrapping_add(1));
+            }
+            U16Register::SP => {
+                self.registers.sp = self.registers.sp.wrapping_add(1);
+            }
+        }
+    }
+
+    fn dec_u16(&mut self, id: U16Register) {
+        match id {
+            U16Register::BC => {
+                self.registers.set_bc(self.registers.bc().wrapping_sub(1));
+            }
+            U16Register::DE => {
+                self.registers.set_de(self.registers.de().wrapping_sub(1));
+            }
+            U16Register::HL => {
+                self.registers.set_hl(self.registers.hl().wrapping_sub(1));
+            }
+            U16Register::SP => {
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+            }
+        }
+    }
+
+    fn add_SP(&mut self, val: i8) {
+        let (new_value, overflowed) = self.registers.sp.overflowing_add(val as u16);
+        self.registers.f.zero = false;
+        self.registers.f.subtraction = false;
+        self.registers.f.half_carry = (self.registers.sp & 0x0F00) + (val as u16 & 0x0F00) > 0x0F00;
+        self.registers.f.carry = overflowed;
+        self.registers.sp = new_value;
+    }
+
+    fn ld_HL(&mut self, val: i8) {
+        let (new_value, overflowed) = self.registers.hl().overflowing_add(val as u16);
+        self.registers.f.zero = false;
+        self.registers.f.subtraction = false;
+        self.registers.f.half_carry = (self.registers.hl() & 0x0F00) + (val as u16 & 0x0F00) > 0x0F00;
+        self.registers.f.carry = overflowed;
+        self.registers.set_hl(new_value);
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 }
 
 #[cfg(test)]
@@ -59,170 +247,5 @@ mod tests {
     use super::*;
 
     #[test]
-    fn af_gets_a_f() {
-        let registers = Registers {
-            a: 0xAB,
-            f: 0xCD,
-            ..Default::default()
-        };
-        assert_eq!(registers.af(), 0xABCD);
-    }
-
-    #[test]
-    fn bc_gets_b_c() {
-        let registers = Registers {
-            b: 0xAB,
-            c: 0xCD,
-            ..Default::default()
-        };
-        assert_eq!(registers.bc(), 0xABCD);
-    }
-
-    #[test]
-    fn de_gets_d_e() {
-        let registers = Registers {
-            d: 0xAB,
-            e: 0xCD,
-            ..Default::default()
-        };
-        assert_eq!(registers.de(), 0xABCD);
-    }
-
-    #[test]
-    fn hl_gets_h_l() {
-        let registers = Registers {
-            h: 0xAB,
-            l: 0xCD,
-            ..Default::default()
-        };
-        assert_eq!(registers.hl(), 0xABCD);
-    }
-
-    #[test]
-    fn set_af_sets_a_f() {
-        let mut registers = Registers::default();
-        registers.set_af(0xABCD);
-        assert_eq!(registers.a, 0xAB);
-        assert_eq!(registers.f, 0xCD);
-    }
-
-    #[test]
-    fn set_bc_sets_b_c() {
-        let mut registers = Registers::default();
-        registers.set_bc(0xABCD);
-        assert_eq!(registers.b, 0xAB);
-        assert_eq!(registers.c, 0xCD);
-    }
-
-    #[test]
-    fn set_de_sets_d_e() {
-        let mut registers = Registers::default();
-        registers.set_de(0xABCD);
-        assert_eq!(registers.d, 0xAB);
-        assert_eq!(registers.e, 0xCD);
-    }
-
-    #[test]
-    fn set_hl_sets_h_l() {
-        let mut registers = Registers::default();
-        registers.set_hl(0xABCD);
-        assert_eq!(registers.h, 0xAB);
-        assert_eq!(registers.l, 0xCD);
-    }
-
-    #[test]
-    fn zero_flag_gets_bit_7() {
-        let registers = Registers {
-            f: 0b10000000,
-            ..Default::default()
-        };
-        assert_eq!(registers.zero_flag(), true);
-
-        let registers = Registers {
-            f: 0b01111111,
-            ..Default::default()
-        };
-        assert_eq!(registers.zero_flag(), false);
-    }
-
-    #[test]
-    fn subtraction_flag_gets_bit_6() {
-        let registers = Registers {
-            f: 0b01000000,
-            ..Default::default()
-        };
-        assert_eq!(registers.subtraction_flag(), true);
-
-        let registers = Registers {
-            f: 0b10111111,
-            ..Default::default()
-        };
-        assert_eq!(registers.subtraction_flag(), false);
-    }
-
-    #[test]
-    fn half_carry_flag_gets_bit_5() {
-        let registers = Registers {
-            f: 0b00100000,
-            ..Default::default()
-        };
-        assert_eq!(registers.half_carry_flag(), true);
-
-        let registers = Registers {
-            f: 0b11011111,
-            ..Default::default()
-        };
-        assert_eq!(registers.half_carry_flag(), false);
-    }
-
-    #[test]
-    fn carry_flag_gets_bit_4() {
-        let registers = Registers {
-            f: 0b00010000,
-            ..Default::default()
-        };
-        assert_eq!(registers.carry_flag(), true);
-
-        let registers = Registers {
-            f: 0b11101111,
-            ..Default::default()
-        };
-        assert_eq!(registers.carry_flag(), false);
-    }
-
-    #[test]
-    fn set_zero_flag_sets_bit_7() {
-        let mut registers = Registers::default();
-        registers.set_zero_flag(true);
-        assert_eq!(registers.f, 0b10000000);
-        registers.set_zero_flag(false);
-        assert_eq!(registers.f, 0);
-    }
-
-    #[test]
-    fn set_subtraction_flag_sets_bit_6() {
-        let mut registers = Registers::default();
-        registers.set_subtraction_flag(true);
-        assert_eq!(registers.f, 0b01000000);
-        registers.set_subtraction_flag(false);
-        assert_eq!(registers.f, 0);
-    }
-
-    #[test]
-    fn set_half_carry_flag_sets_bit_5() {
-        let mut registers = Registers::default();
-        registers.set_half_carry_flag(true);
-        assert_eq!(registers.f, 0b00100000);
-        registers.set_half_carry_flag(false);
-        assert_eq!(registers.f, 0);
-    }
-
-    #[test]
-    fn set_carry_flag_sets_bit_4() {
-        let mut registers = Registers::default();
-        registers.set_carry_flag(true);
-        assert_eq!(registers.f, 0b00010000);
-        registers.set_carry_flag(false);
-        assert_eq!(registers.f, 0);
-    }
+    fn boop() {}
 }
