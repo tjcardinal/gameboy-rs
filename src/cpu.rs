@@ -6,6 +6,63 @@ pub struct Cpu {
 }
 
 impl Cpu {
+    // 8-bit load
+    fn ld(&mut self, id: U8Register, val: u8) {
+        let reg = match id {
+            U8Register::A => &mut self.registers.a,
+            U8Register::B => &mut self.registers.b,
+            U8Register::C => &mut self.registers.c,
+            U8Register::D => &mut self.registers.d,
+            U8Register::E => &mut self.registers.e,
+            U8Register::H => &mut self.registers.h,
+            U8Register::L => &mut self.registers.l,
+        };
+        *reg = val;
+    }
+
+    fn ldi(&mut self, id: U8Register, val: u8) {
+        let reg = match id {
+            U8Register::A => &mut self.registers.a,
+            U8Register::B => &mut self.registers.b,
+            U8Register::C => &mut self.registers.c,
+            U8Register::D => &mut self.registers.d,
+            U8Register::E => &mut self.registers.e,
+            U8Register::H => &mut self.registers.h,
+            U8Register::L => &mut self.registers.l,
+        };
+        *reg = val;
+        self.registers.set_hl(self.registers.hl() + 1);
+    }
+
+    fn ldd(&mut self, id: U8Register, val: u8) {
+        let reg = match id {
+            U8Register::A => &mut self.registers.a,
+            U8Register::B => &mut self.registers.b,
+            U8Register::C => &mut self.registers.c,
+            U8Register::D => &mut self.registers.d,
+            U8Register::E => &mut self.registers.e,
+            U8Register::H => &mut self.registers.h,
+            U8Register::L => &mut self.registers.l,
+        };
+        *reg = val;
+        self.registers.set_hl(self.registers.hl() + 1);
+    }
+
+    // 16-bit load
+    fn ld_u16(&mut self, id: U16Register, val: u16) {
+        let reg = match id {
+            U16Register::BC => self.registers.set_bc(val),
+            U16Register::DE => self.registers.set_de(val),
+            U16Register::HL => self.registers.set_hl(val),
+            U16Register::SP => self.registers.sp = val,
+        };
+    }
+
+
+
+
+
+
     // 8-bit arithmetic/Logic
     fn add(&mut self, val: u8) {
         let (new_value, overflowed) = self.registers.a.overflowing_add(val);
@@ -195,10 +252,10 @@ impl Cpu {
     }
 
     fn ld_HL(&mut self, val: i8) {
-        let (new_value, overflowed) = self.registers.hl().overflowing_add(val as u16);
+        let (new_value, overflowed) = self.registers.sp.overflowing_add(val as u16);
         self.registers.f.zero = false;
         self.registers.f.subtraction = false;
-        self.registers.f.half_carry = (self.registers.hl() & 0x0F00) + (val as u16 & 0x0F00) > 0x0F00;
+        self.registers.f.half_carry = (self.registers.sp & 0x0F00) + (val as u16 & 0x0F00) > 0x0F00;
         self.registers.f.carry = overflowed;
         self.registers.set_hl(new_value);
     }
